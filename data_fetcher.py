@@ -127,14 +127,78 @@ class DataFetcher:
             start_date_str = start_date if isinstance(start_date, str) else start_date.strftime('%Y%m%d')
             end_date_str = end_date if isinstance(end_date, str) else end_date.strftime('%Y%m%d')
 
+            logger.debug(f"准备获取股票 {code} 的历史数据: 开始日期={start_date_str}, 结束日期={end_date_str}")
+            
             # 获取股票历史数据
-            stock_zh_a_hist_df = ak.stock_zh_a_hist(
-                symbol=code, 
-                period="daily",
-                start_date=start_date_str,
-                end_date=end_date_str,
-                adjust="qfq"  # 前复权
-            )
+            try:
+                # 根据测试结果，使用stock_zh_a_daily函数而不是stock_zh_a_hist函数
+                # 测试显示stock_zh_a_daily函数可以成功获取数据
+                logger.debug(f"使用stock_zh_a_daily函数获取股票 {code} 的历史数据")
+                
+                # 为了支持日期范围过滤，我们需要先获取完整数据，然后再进行过滤
+                # 使用带市场标识的股票代码格式
+                market_code = code
+                if not (code.startswith('sh') or code.startswith('sz') or code.startswith('bj')):
+                    # 如果没有市场标识，根据代码前缀自动添加
+                    if code.startswith('6'):
+                        market_code = f'sh{code}'
+                    elif code.startswith('0') or code.startswith('3'):
+                        market_code = f'sz{code}'
+                    elif code.startswith('8'):
+                        market_code = f'bj{code}'
+                
+                logger.debug(f"使用带市场标识的股票代码: {market_code}")
+                
+                # 获取完整的日线数据
+                stock_daily_df = ak.stock_zh_a_daily(
+                    symbol=market_code,  # 使用带市场标识的代码
+                    adjust="qfq"  # 前复权
+                )
+                
+                # 验证数据是否获取成功
+                if stock_daily_df is None or stock_daily_df.empty:
+                    logger.warning(f"获取股票 {code} ({market_code}) 数据为空")
+                    raise ValueError(f"获取股票 {code} 数据为空")
+                    
+                # 过滤日期范围
+                logger.debug(f"过滤日期范围: {start_date_str} 到 {end_date_str}")
+                # 将日期列转换为datetime类型
+                stock_daily_df['date'] = pd.to_datetime(stock_daily_df['date'])
+                # 过滤指定日期范围内的数据
+                filtered_df = stock_daily_df[(stock_daily_df['date'] >= start_date_str) & \
+                                           (stock_daily_df['date'] <= end_date_str)]
+                
+                if filtered_df.empty:
+                    logger.warning(f"在日期范围 {start_date_str} 到 {end_date_str} 内没有找到股票 {code} 的数据")
+                    raise ValueError(f"在日期范围内没有找到数据")
+                    
+                # 重命名列以匹配原有数据结构
+                filtered_df = filtered_df.rename(columns={
+                    'date': '日期',
+                    'open': '开盘',
+                    'close': '收盘',
+                    'high': '最高',
+                    'low': '最低',
+                    'volume': '成交量',
+                    'amount': '成交额'
+                })
+                
+                # 添加股票代码列
+                filtered_df['股票代码'] = code
+                
+                # 重新排列列顺序以匹配原有数据结构
+                expected_columns = ['日期', '股票代码', '开盘', '收盘', '最高', '最低', '成交量', '成交额']
+                filtered_df = filtered_df.reindex(columns=expected_columns)
+                
+                # 使用过滤后的数据作为返回结果
+                stock_zh_a_hist_df = filtered_df
+                
+            except Exception as ak_error:
+                # 详细记录akshare调用异常
+                import traceback
+                logger.error(f"akshare调用异常: 股票代码={code}, 异常类型={type(ak_error).__name__}, 异常信息={str(ak_error)}")
+                logger.debug(f"异常堆栈:\n{traceback.format_exc()}")
+                raise
 
             if not stock_zh_a_hist_df.empty:
                 # 重命名列
@@ -149,6 +213,10 @@ class DataFetcher:
                 stock_zh_a_hist_df = stock_zh_a_hist_df.rename(columns=existing_columns)
 
                 stock_zh_a_hist_df['code'] = code
+                
+                # 将Timestamp类型的date列转换为字符串格式，以便sqlite3能够接受
+                if 'date' in stock_zh_a_hist_df.columns:
+                    stock_zh_a_hist_df['date'] = stock_zh_a_hist_df['date'].dt.strftime('%Y-%m-%d')
                 
                 # 确保需要的列存在
                 required_columns = ['code', 'date', 'open', 'high', 'low', 'close', 'volume']
@@ -167,7 +235,9 @@ class DataFetcher:
 
             return stock_zh_a_hist_df
         except Exception as e:
-            logger.error(f"获取股票{code}价格数据失败: {e}")
+            import traceback
+            logger.error(f"获取股票{code}价格数据失败: 异常类型={type(e).__name__}, 异常信息={str(e)}")
+            logger.debug(f"异常堆栈:\n{traceback.format_exc()}")
             raise
 
     @retry(Exception, tries=3, delay=2, backoff=2)

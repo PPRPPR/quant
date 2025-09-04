@@ -233,3 +233,42 @@ class StockDatabase:
         except sqlite3.Error as e:
             logging.error(f"保存用户反馈失败: {e}")
             raise
+    
+    def get_latest_stock_date(self, code: str) -> Optional[str]:
+        """获取指定股票的最新数据日期
+        
+        Args:
+            code: 股票代码
+            
+        Returns:
+            最新日期的字符串表示(YYYY-MM-DD)，如果没有数据则返回None
+        """
+        try:
+            with self.get_connection() as conn:
+                query = "SELECT MAX(date) FROM stock_prices WHERE code = ?"
+                cursor = conn.cursor()
+                cursor.execute(query, (code,))
+                result = cursor.fetchone()[0]
+                return result
+        except (sqlite3.Error, pd.io.sql.DatabaseError) as e:
+            logging.error(f"获取股票 {code} 的最新日期失败: {e}")
+            return None
+            
+    def get_all_stocks_latest_dates(self) -> pd.DataFrame:
+        """获取所有股票的最新数据日期
+        
+        Returns:
+            DataFrame，包含code和latest_date两列
+        """
+        try:
+            with self.get_connection() as conn:
+                query = """
+                    SELECT code, MAX(date) as latest_date 
+                    FROM stock_prices 
+                    GROUP BY code
+                """
+                df = pd.read_sql_query(query, conn)
+                return df
+        except (sqlite3.Error, pd.io.sql.DatabaseError) as e:
+            logging.error(f"获取所有股票的最新日期失败: {e}")
+            return pd.DataFrame(columns=['code', 'latest_date'])
